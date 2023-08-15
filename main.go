@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -63,33 +65,6 @@ func getEnvAndType() (string, string, error) {
 	return env, _type, nil
 }
 
-func levenshteinDistance(s1, s2 string) int {
-	m, n := len(s1), len(s2)
-	matrix := make([][]int, m+1)
-
-	// Initialize the matrix
-	for i := 0; i <= m; i++ {
-		matrix[i] = make([]int, n+1)
-		matrix[i][0] = i
-	}
-	for j := 0; j <= n; j++ {
-		matrix[0][j] = j
-	}
-
-	// Fill in the matrix
-	for i := 1; i <= m; i++ {
-		for j := 1; j <= n; j++ {
-			cost := 1
-			if s1[i-1] == s2[j-1] {
-				cost = 0
-			}
-			matrix[i][j] = min(matrix[i-1][j]+1, matrix[i][j-1]+1, matrix[i-1][j-1]+cost)
-		}
-	}
-
-	return matrix[m][n]
-}
-
 func min(a, b, c int) int {
 	if a < b && a < c {
 		return a
@@ -98,38 +73,6 @@ func min(a, b, c int) int {
 		return b
 	}
 	return c
-}
-
-func findClosestFile(targetPath string) (string, error) {
-	dir := filepath.Dir(targetPath)                                                       // Get the directory of targetPath
-	targetBase := strings.TrimSuffix(filepath.Base(targetPath), filepath.Ext(targetPath)) // Get the base name without extension
-	files, err := ioutil.ReadDir(dir)
-	if err != nil {
-		return "", err // Return the error if unable to read the directory
-	}
-
-	var closestFile string
-	var closestRatio float64
-
-	for _, file := range files {
-		fileBase := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name())) // Get the base name without extension
-		distance := levenshteinDistance(targetBase, fileBase)
-		ratio := 1 - float64(distance)/float64(max(len(targetBase), len(fileBase)))
-
-		if ratio > closestRatio {
-			closestRatio = ratio
-			closestFile = filepath.Join(dir, file.Name())
-		}
-	}
-
-	if closestRatio > 0.98 {
-		coloredLogf(grayColor, "Ratio: %f", closestRatio)
-		return closestFile, nil
-	}
-
-	coloredLogf(warningColor, "Ratio: %f", closestRatio)
-	coloredLogf(warningColor, "File: "+targetPath)
-	return "", fmt.Errorf("No close match found")
 }
 
 func max(a, b int) int {
@@ -313,6 +256,7 @@ func main() {
 	}
 
 	target, err := url.Parse("http://localhost:8080")
+	// target, err := url.Parse("https://dummyjson.com")
 
 	if err != nil {
 		coloredLogf(errorColor, "Error parsing target URL: %v", err)
@@ -335,6 +279,28 @@ func main() {
 		proxy.ModifyResponse = func(r *http.Response) error {
 			return modifyResponse(r, env, _type, uuid)
 		}
+
+		proxy.Director = func(req *http.Request) {
+			req.Header.Add("User-Agent", "Curl/1.0")
+			req.Host = target.Host
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.URL.Path = target.Path + req.URL.Path
+		}
+		proxy.ErrorLog = log.New(os.Stdout, "Proxy Error: ", log.LstdFlags)
+		proxy.Transport = &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			DisableKeepAlives:     false,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+
 		folderPath := env + "/" + _type + "/" + r.Method + "/" + uuid + strings.TrimSuffix(r.URL.Path, "/")
 
 		queryString, _ := BuildOrderedQueryString(r)
@@ -345,9 +311,8 @@ func main() {
 
 		fullPath := filepath.Join(folderPath) + queryString + extension
 
-		// Check if file exists
-		closestFile, err := findClosestFile(fullPath)
-		if err == nil && closestFile != "" {
+		fileInfo, err := os.Stat(fullPath)
+		if err == nil && fileInfo.Mode().IsRegular() {
 			coloredLogf(greenColor, "File found for: %s", fullPath)
 			w.Header().Set("Access-Control-Allow-Origin", "*") // Allow any origin
 			w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
@@ -357,7 +322,9 @@ func main() {
 			return
 		}
 
-		coloredLogf(cyanColor, "Proxied URL: %s", r.URL.String()) // Log the proxied URL
+		w.Header().Set("Access-Control-Allow-Origin", "*") // Allow any origin
+
+		coloredLogf(cyanColor, "Proxied URL: %s%s", target, r.URL.String()) // Log the proxied URL
 		proxy.ServeHTTP(w, r)
 	}))
 

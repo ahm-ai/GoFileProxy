@@ -239,6 +239,14 @@ func modifyResponse(r *http.Response, env string, _type string, uuid string) err
 
 	coloredLogf(greenColor, "Requested Folder: "+fullPath)
 
+	if r.Request.Method == "POST" || r.Request.Method == "PUT" {
+		// Delete fullpath.
+		if err := os.RemoveAll(fullPath); err != nil {
+			fmt.Printf("Failed to delete file: %v\n", err)
+			return err
+		}
+	}
+
 	// Create all necessary directories in the path
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		coloredLogf(cyanColor, "Create Folder:"+folderPath)

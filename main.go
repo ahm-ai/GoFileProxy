@@ -122,7 +122,8 @@ func findClosestFile(targetPath string) (string, error) {
 		}
 	}
 
-	if closestRatio > 0.75 {
+	if closestRatio > 0.98 {
+		coloredLogf(grayColor, "Ratio: %f", closestRatio)
 		return closestFile, nil
 	}
 
@@ -159,8 +160,6 @@ func createFolder(folderPath string, fullPath string, requestBody []byte) {
 		fmt.Printf("Failed to write to file: %v\n", err)
 		return
 	}
-
-	fmt.Printf("File created successfully with request body at %s\n", fullPath)
 }
 
 func enableCORS(handler http.HandlerFunc) http.HandlerFunc {
@@ -204,9 +203,40 @@ func modifyResponse(r *http.Response, env string, _type string, uuid string) err
 		extension = ".json" // Default extension
 	}
 
-	folderPath := env + "/" + _type + "/" + uuid + strings.TrimSuffix(r.Request.URL.Path, "/")
-	// Combine folder path with file name
-	fullPath := filepath.Join(folderPath + extension)
+	folderPath := env + "/" + _type + "/" + r.Request.Method + "/" + uuid + strings.TrimSuffix(r.Request.URL.Path, "/")
+
+	resp := r.Request // Get the request from the response
+	rawQuery := resp.URL.RawQuery
+
+	queryStr := ""
+
+	pairs := strings.Split(rawQuery, "&")
+	for _, pair := range pairs {
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) != 2 {
+			continue // Skip malformed key-value pairs
+		}
+		key, err := url.QueryUnescape(parts[0])
+		if err != nil {
+			continue // Handle error in key decoding
+		}
+
+		value, err := url.QueryUnescape(parts[1])
+		if err != nil {
+			continue // Handle error in value decoding
+		}
+		queryStr += url.QueryEscape(key) + "=" + url.QueryEscape(value) + "&"
+	}
+
+	queryStr = strings.TrimSuffix(queryStr, "&") // Remove the trailing '&'
+
+	decodedQueryStr, _ := url.QueryUnescape(queryStr)
+	if decodedQueryStr != "" {
+		decodedQueryStr = "?" + decodedQueryStr
+	}
+
+	fullPath := filepath.Join(folderPath) + decodedQueryStr + extension
+
 	coloredLogf(greenColor, "Requested Folder: "+fullPath)
 
 	// Create all necessary directories in the path
@@ -231,12 +261,39 @@ func modifyResponse(r *http.Response, env string, _type string, uuid string) err
 			return err
 		}
 
-		fmt.Printf("File created successfully with response body at %s\n", fullPath)
 	}
 
 	// Write the body back to the response
 	r.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
 	return nil
+}
+
+func BuildOrderedQueryString(r *http.Request) (string, error) {
+	queryValues, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return "", err
+	}
+
+	queryStr := ""
+	for _, param := range strings.Split(r.URL.RawQuery, "&") {
+		keyVal := strings.SplitN(param, "=", 2)
+		if len(keyVal) != 2 {
+			continue
+		}
+		key, _ := keyVal[0], keyVal[1]
+		values, ok := queryValues[key]
+		if ok {
+			for _, v := range values {
+				queryStr += key + "=" + v + "&"
+			}
+		}
+	}
+
+	if len(queryStr) > 0 {
+		queryStr = queryStr[:len(queryStr)-1] // Remove trailing "&"
+	}
+
+	return queryStr, nil
 }
 
 func main() {
@@ -257,21 +314,28 @@ func main() {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
 	http.HandleFunc("/", enableCORS(func(w http.ResponseWriter, r *http.Request) {
-		coloredLogf(infoColor, "Method request: %s", r.Method)
-		coloredLogf(infoColor, "Received request: %s", r.URL.Path)
-		coloredLogf(infoColor, "Received body: %s", r.Body)
+		// coloredLogf(grayColor, "Received request: %s", r.URL.Path)
+		coloredLogf(grayColor, "Method request: %s", r.Method)
+		coloredLogf(grayColor, "Requested URL: %s", r.URL.String()) // Log the proxied URL
+		coloredLogf(grayColor, "Received body: %s", r.Body)
 
 		// Extension
 		extension := ".json"
 
-		uuid := r.Header.Get("X-UUID")
+		uuid := r.Header.Get("UUID")
 
 		proxy.ModifyResponse = func(r *http.Response) error {
 			return modifyResponse(r, env, _type, uuid)
 		}
+		folderPath := env + "/" + _type + "/" + r.Method + "/" + uuid + strings.TrimSuffix(r.URL.Path, "/")
 
-		folderPath := env + "/" + _type + "/" + uuid + strings.TrimSuffix(r.URL.Path, "/")
-		fullPath := filepath.Join(folderPath) + extension
+		queryString, _ := BuildOrderedQueryString(r)
+
+		if queryString != "" {
+			queryString = "?" + queryString
+		}
+
+		fullPath := filepath.Join(folderPath) + queryString + extension
 
 		// Check if file exists
 		closestFile, err := findClosestFile(fullPath)
@@ -285,6 +349,7 @@ func main() {
 			return
 		}
 
+		coloredLogf(cyanColor, "Proxied URL: %s", r.URL.String()) // Log the proxied URL
 		proxy.ServeHTTP(w, r)
 	}))
 

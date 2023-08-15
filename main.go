@@ -325,7 +325,7 @@ func main() {
 			return
 		}
 
-		w.Header().Set("Access-Control-Allow-Origin", "*") // Allow any origin
+		// w.Header().Set("Access-Control-Allow-Origin", "*") // Allow any origin
 
 		coloredLogf(cyanColor, "Proxied URL: %s%s", target, r.URL.String()) // Log the proxied URL
 		proxy.ServeHTTP(w, r)

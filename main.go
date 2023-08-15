@@ -160,13 +160,15 @@ func createFolder(folderPath string, fullPath string, requestBody []byte) {
 
 func enableCORS(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Set headers to allow CORS
-		w.Header().Set("Access-Control-Allow-Origin", "*") // Adjust as needed
+
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 
 		// If it's a preflight request, respond with OK
 		if r.Method == "OPTIONS" {
+			if w.Header().Get("Access-Control-Allow-Origin") == "" {
+				w.Header().Set("Access-Control-Allow-Origin", "*") // Allow any origin
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -174,6 +176,60 @@ func enableCORS(handler http.HandlerFunc) http.HandlerFunc {
 		// Call the original handler
 		handler(w, r)
 	}
+}
+
+func modifyResponse(r *http.Response, env string, _type string, uuid string) error {
+	// Read the response body
+	bodyBytes, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+
+	// Determine the file extension based on Content-Type
+	contentType := r.Header.Get("Content-Type")
+	extension := ""
+	switch {
+	case strings.Contains(contentType, "application/json"):
+		extension = ".json"
+	case strings.Contains(contentType, "text/html"):
+		extension = ".html"
+	case strings.Contains(contentType, "application/xml"):
+		extension = ".xml" // Handling for XML
+	default:
+		extension = ".json" // Default extension
+	}
+
+	folderPath := env + "/" + _type + "/" + uuid + r.Request.URL.Path
+	coloredLogf(infoColor, "✨  Create Folder:"+folderPath)
+	// Combine folder path with file name
+	fullPath := filepath.Join(folderPath + extension)
+
+	// Create all necessary directories in the path
+	if err := os.MkdirAll(folderPath, 0755); err != nil {
+		fmt.Printf("Failed to create directories: %v\n", err)
+		return err
+	}
+
+	// Create the file
+	file, err := os.Create(fullPath)
+	if err != nil {
+		fmt.Printf("Failed to create file: %v\n", err)
+		return err
+	}
+	defer file.Close()
+
+	// Write the response body to the file
+	_, err = file.Write(bodyBytes)
+	if err != nil {
+		fmt.Printf("Failed to write to file: %v\n", err)
+		return err
+	}
+
+	fmt.Printf("File created successfully with response body at %s\n", fullPath)
+
+	// Write the body back to the response
+	r.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+	return nil
 }
 
 func main() {
@@ -184,7 +240,7 @@ func main() {
 		return
 	}
 
-	target, err := url.Parse("http://google.com")
+	target, err := url.Parse("http://localhost:8080")
 
 	if err != nil {
 		coloredLogf(errorColor, "Error parsing target URL: %v", err)
@@ -192,59 +248,6 @@ func main() {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ModifyResponse = func(r *http.Response) error {
-		// Read the response body
-		bodyBytes, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			return err
-		}
-
-		// Determine the file extension based on Content-Type
-		contentType := r.Header.Get("Content-Type")
-		extension := ""
-		switch {
-		case strings.Contains(contentType, "application/json"):
-			extension = ".json"
-		case strings.Contains(contentType, "text/html"):
-			extension = ".html"
-		case strings.Contains(contentType, "application/xml"):
-			extension = ".xml" // Handling for XML
-		// Add more cases as needed
-		default:
-			extension = ".txt" // Default extension
-		}
-
-		folderPath := env + "/" + _type + "/" + r.Request.URL.Path
-		// Combine folder path with file name
-		fullPath := filepath.Join(folderPath + extension)
-
-		// Create all necessary directories in the path
-		if err := os.MkdirAll(folderPath, 0755); err != nil {
-			fmt.Printf("Failed to create directories: %v\n", err)
-			return err
-		}
-
-		// Create the file
-		file, err := os.Create(fullPath)
-		if err != nil {
-			fmt.Printf("Failed to create file: %v\n", err)
-			return err
-		}
-		defer file.Close()
-
-		// Write the response body to the file
-		_, err = file.Write(bodyBytes)
-		if err != nil {
-			fmt.Printf("Failed to write to file: %v\n", err)
-			return err
-		}
-
-		fmt.Printf("File created successfully with response body at %s\n", fullPath)
-
-		// Write the body back to the response
-		r.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
-		return nil
-	}
 
 	http.HandleFunc("/", enableCORS(func(w http.ResponseWriter, r *http.Request) {
 		coloredLogf(infoColor, "Received request: %s", r.URL.Path)
@@ -252,9 +255,17 @@ func main() {
 
 		// Extension
 		extension := ".json"
-		folderPath := env + "/" + _type + "/" + r.URL.Path
+
+		uuid := r.Header.Get("uuid")
+
+		proxy.ModifyResponse = func(r *http.Response) error {
+			return modifyResponse(r, env, _type, uuid)
+		}
+
+		folderPath := env + "/" + _type + "/" + uuid + r.URL.Path
+		coloredLogf(greenColor, "Get Folder:"+folderPath)
 		// Combine folder path with file name
-		fullPath := filepath.Join(folderPath + extension)
+		fullPath := filepath.Join(greenColor + extension)
 
 		// Check if file exists
 		closestFile, err := findClosestFile(fullPath)
@@ -267,8 +278,8 @@ func main() {
 		proxy.ServeHTTP(w, r)
 	}))
 
-	coloredLogf(infoColor, "Starting server on http://localhost:8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	coloredLogf(infoColor, "Starting server on http://localhost:9090")
+	if err := http.ListenAndServe(":9090", nil); err != nil {
 		coloredLogf(errorColor, "Server failed: %v", err)
 	}
 }

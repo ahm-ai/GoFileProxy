@@ -14,12 +14,16 @@ import (
 )
 
 const (
-	infoColor    = "\033[1;34m%s\033[0m" // Blue
-	warningColor = "\033[1;33m%s\033[0m" // Yellow
-	errorColor   = "\033[1;31m%s\033[0m" // Red
-	cyanColor    = "\033[1;36m%s\033[0m" // Cyan
-	purpleColor  = "\033[1;35m%s\033[0m" // Purple
-	greenColor   = "\033[1;32m%s\033[0m" // Green
+	infoColor      = "\033[1;34m%s\033[0m" // Blue
+	warningColor   = "\033[1;33m%s\033[0m" // Yellow
+	errorColor     = "\033[1;31m%s\033[0m" // Red
+	cyanColor      = "\033[1;36m%s\033[0m" // Cyan
+	purpleColor    = "\033[1;35m%s\033[0m" // Purple
+	greenColor     = "\033[1;32m%s\033[0m" // Green
+	whiteColor     = "\033[1;37m%s\033[0m" // White
+	magentaColor   = "\033[1;95m%s\033[0m" // Magenta
+	grayColor      = "\033[1;90m%s\033[0m" // Gray
+	lightBlueColor = "\033[1;94m%s\033[0m" // Light Blue
 )
 
 func coloredLogf(color, format string, a ...interface{}) {
@@ -118,11 +122,12 @@ func findClosestFile(targetPath string) (string, error) {
 		}
 	}
 
-	if closestRatio > 0.9 {
+	if closestRatio > 0.75 {
 		return closestFile, nil
 	}
 
 	coloredLogf(warningColor, "Ratio: %f", closestRatio)
+	coloredLogf(warningColor, "File: "+targetPath)
 	return "", fmt.Errorf("No close match found")
 }
 
@@ -199,33 +204,35 @@ func modifyResponse(r *http.Response, env string, _type string, uuid string) err
 		extension = ".json" // Default extension
 	}
 
-	folderPath := env + "/" + _type + "/" + uuid + r.Request.URL.Path
-	coloredLogf(infoColor, "✨  Create Folder:"+folderPath)
+	folderPath := env + "/" + _type + "/" + uuid + strings.TrimSuffix(r.Request.URL.Path, "/")
 	// Combine folder path with file name
 	fullPath := filepath.Join(folderPath + extension)
+	coloredLogf(greenColor, "Requested Folder: "+fullPath)
 
 	// Create all necessary directories in the path
-	if err := os.MkdirAll(folderPath, 0755); err != nil {
-		fmt.Printf("Failed to create directories: %v\n", err)
-		return err
-	}
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		coloredLogf(cyanColor, "Create Folder:"+folderPath)
+		if err := os.MkdirAll(folderPath, 0755); err != nil {
+			fmt.Printf("Failed to create directories: %v\n", err)
+			return err
+		}
+		// Create the file only if it doesn't exist
+		file, err := os.Create(fullPath)
+		if err != nil {
+			fmt.Printf("Failed to create file: %v\n", err)
+			return err
+		}
+		defer file.Close()
 
-	// Create the file
-	file, err := os.Create(fullPath)
-	if err != nil {
-		fmt.Printf("Failed to create file: %v\n", err)
-		return err
-	}
-	defer file.Close()
+		// Write the response body to the file
+		_, err = file.Write(bodyBytes)
+		if err != nil {
+			fmt.Printf("Failed to write to file: %v\n", err)
+			return err
+		}
 
-	// Write the response body to the file
-	_, err = file.Write(bodyBytes)
-	if err != nil {
-		fmt.Printf("Failed to write to file: %v\n", err)
-		return err
+		fmt.Printf("File created successfully with response body at %s\n", fullPath)
 	}
-
-	fmt.Printf("File created successfully with response body at %s\n", fullPath)
 
 	// Write the body back to the response
 	r.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
@@ -250,35 +257,38 @@ func main() {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
 	http.HandleFunc("/", enableCORS(func(w http.ResponseWriter, r *http.Request) {
+		coloredLogf(infoColor, "Method request: %s", r.Method)
 		coloredLogf(infoColor, "Received request: %s", r.URL.Path)
 		coloredLogf(infoColor, "Received body: %s", r.Body)
 
 		// Extension
 		extension := ".json"
 
-		uuid := r.Header.Get("uuid")
+		uuid := r.Header.Get("X-UUID")
 
 		proxy.ModifyResponse = func(r *http.Response) error {
 			return modifyResponse(r, env, _type, uuid)
 		}
 
-		folderPath := env + "/" + _type + "/" + uuid + r.URL.Path
-		coloredLogf(greenColor, "Get Folder:"+folderPath)
-		// Combine folder path with file name
-		fullPath := filepath.Join(greenColor + extension)
+		folderPath := env + "/" + _type + "/" + uuid + strings.TrimSuffix(r.URL.Path, "/")
+		fullPath := filepath.Join(folderPath) + extension
 
 		// Check if file exists
 		closestFile, err := findClosestFile(fullPath)
 		if err == nil && closestFile != "" {
-			coloredLogf(greenColor, "File found for: %s", r.URL.Path)
-			http.ServeFile(w, r, closestFile)
+			coloredLogf(greenColor, "File found for: %s", fullPath)
+			w.Header().Set("Access-Control-Allow-Origin", "*") // Allow any origin
+			w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+			w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+
+			http.ServeFile(w, r, fullPath)
 			return
 		}
 
 		proxy.ServeHTTP(w, r)
 	}))
 
-	coloredLogf(infoColor, "Starting server on http://localhost:9090")
+	coloredLogf(grayColor, "Starting server on http://localhost:9090")
 	if err := http.ListenAndServe(":9090", nil); err != nil {
 		coloredLogf(errorColor, "Server failed: %v", err)
 	}

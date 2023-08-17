@@ -10,7 +10,9 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,20 +30,27 @@ const (
 	lightBlueColor = "\033[1;94m%s\033[0m" // Light Blue
 )
 
+var (
+	env          string
+	_type        string
+	err          error
+	cacheEnabled bool
+)
+
 func coloredLogf(color, format string, a ...interface{}) {
 	msg := fmt.Sprintf(format, a...)
 	coloredMsg := fmt.Sprintf(color, msg)
 	log.Print(coloredMsg)
 }
 
-func getEnvAndType() (string, string, error) {
+func getEnvAndType() (string, string, bool, error) {
 	args := make(map[string]string)
 
 	// Parse command-line arguments
 	for _, arg := range os.Args[1:] {
 		parts := strings.Split(arg, "=")
 		if len(parts) != 2 {
-			return "", "", fmt.Errorf("Arguments must be in the form key=value")
+			return "", "", false, fmt.Errorf("Arguments must be in the form key=value")
 		}
 		args[parts[0]] = parts[1]
 	}
@@ -49,20 +58,32 @@ func getEnvAndType() (string, string, error) {
 	// Get the 'env' argument
 	env, ok := args["env"]
 	if !ok {
-		return "", "", fmt.Errorf("env argument is required")
+		return "", "", false, fmt.Errorf("env argument is required")
 	}
 
 	// Get the 'type' argument
 	_type, ok := args["type"]
 	if !ok {
-		return "", "", fmt.Errorf("type argument is required")
+		return "", "", false, fmt.Errorf("type argument is required")
+	}
+
+	// Get the 'cache' argument
+	cache, ok := args["cache"]
+	if !ok {
+		return "", "", false, fmt.Errorf("cache argument is required")
 	}
 
 	// Convert 'env' and 'type' to uppercase
 	env = strings.ToUpper(env)
 	_type = strings.ToUpper(_type)
 
-	return env, _type, nil
+	// Convert 'cache' to boolean
+	cacheEnabled, err := strconv.ParseBool(cache)
+	if err != nil {
+		return "", "", false, fmt.Errorf("cache argument must be true or false")
+	}
+
+	return env, _type, cacheEnabled, nil
 }
 
 func min(a, b, c int) int {
@@ -193,28 +214,46 @@ func modifyResponse(r *http.Response, env string, _type string, uuid string) err
 		}
 	}
 
-	// Create all necessary directories in the path
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		coloredLogf(cyanColor, "Create Folder:"+folderPath)
-		if err := os.MkdirAll(folderPath, 0755); err != nil {
-			fmt.Printf("Failed to create directories: %v\n", err)
-			return err
-		}
-		// Create the file only if it doesn't exist
-		file, err := os.Create(fullPath)
-		if err != nil {
-			fmt.Printf("Failed to create file: %v\n", err)
-			return err
-		}
-		defer file.Close()
+	segments := strings.Split(folderPath, "/")
 
-		// Write the response body to the file
-		_, err = file.Write(bodyBytes)
-		if err != nil {
-			fmt.Printf("Failed to write to file: %v\n", err)
-			return err
-		}
+	filteredSegments := make([]string, 0, len(segments))
 
+	for _, segment := range segments {
+		if segment != "" {
+			filteredSegments = append(filteredSegments, segment)
+		}
+	}
+
+	if len(filteredSegments) > 1 {
+		filteredSegments = filteredSegments[:len(filteredSegments)-1]
+	}
+
+	basePath := strings.Join(filteredSegments, "/")
+
+	if cacheEnabled {
+		// Create all necessary directories in the path
+		if _, err := os.Stat(basePath); os.IsNotExist(err) {
+			coloredLogf(cyanColor, "Create Folder:"+basePath)
+			if err := os.MkdirAll(basePath, 0755); err != nil {
+				fmt.Printf("Failed to create directories: %v\n", err)
+				return err
+			}
+			// Create the file only if it doesn't exist
+			file, err := os.Create(fullPath)
+			if err != nil {
+				fmt.Printf("Failed to create file: %v\n", err)
+				return err
+			}
+			defer file.Close()
+
+			// Write the response body to the file
+			_, err = file.Write(bodyBytes)
+			if err != nil {
+				fmt.Printf("Failed to write to file: %v\n", err)
+				return err
+			}
+
+		}
 	}
 
 	// Write the body back to the response
@@ -250,13 +289,26 @@ func BuildOrderedQueryString(r *http.Request) (string, error) {
 	return queryStr, nil
 }
 
+func curlHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/curl_specific_path" {
+
+		scriptPath := "./CURL/script.sh"
+		output, err := exec.Command("sh", scriptPath).Output()
+
+		coloredLogf(greenColor, "output: "+string(output))
+
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// w.Write(output)
+		fmt.Fprintf(w, string(output)) // Send the output as a response
+	}
+}
+
 func main() {
 
-	env, _type, err := getEnvAndType()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	env, _type, cacheEnabled, _ = getEnvAndType()
 
 	target, err := url.Parse("http://localhost:8080")
 	// target, err := url.Parse("https://dummyjson.com")
@@ -278,6 +330,11 @@ func main() {
 		extension := ".json"
 
 		uuid := r.Header.Get("UUID")
+
+		if r.URL.Path == "/curl_specific_path" {
+			curlHandler(w, r)
+			return
+		}
 
 		proxy.ModifyResponse = func(r *http.Response) error {
 			return modifyResponse(r, env, _type, uuid)
@@ -314,15 +371,17 @@ func main() {
 
 		fullPath := filepath.Join(folderPath) + queryString + extension
 
-		fileInfo, err := os.Stat(fullPath)
-		if err == nil && fileInfo.Mode().IsRegular() {
-			coloredLogf(greenColor, "File found for: %s", fullPath)
-			w.Header().Set("Access-Control-Allow-Origin", "*") // Allow any origin
-			w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-			w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+		if cacheEnabled {
+			fileInfo, err := os.Stat(fullPath)
+			if err == nil && fileInfo.Mode().IsRegular() {
+				coloredLogf(greenColor, "File found for: %s", fullPath)
+				w.Header().Set("Access-Control-Allow-Origin", "*") // Allow any origin
+				w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+				w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 
-			http.ServeFile(w, r, fullPath)
-			return
+				http.ServeFile(w, r, fullPath)
+				return
+			}
 		}
 
 		coloredLogf(cyanColor, "Proxied URL: %s%s", target, r.URL.String()) // Log the proxied URL

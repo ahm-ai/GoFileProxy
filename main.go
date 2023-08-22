@@ -238,22 +238,23 @@ func modifyResponse(r *http.Response, env string, _type string, uuid string) err
 				fmt.Printf("Failed to create directories: %v\n", err)
 				return err
 			}
-			// Create the file only if it doesn't exist
-			file, err := os.Create(fullPath)
-			if err != nil {
-				fmt.Printf("Failed to create file: %v\n", err)
-				return err
-			}
-			defer file.Close()
-
-			// Write the response body to the file
-			_, err = file.Write(bodyBytes)
-			if err != nil {
-				fmt.Printf("Failed to write to file: %v\n", err)
-				return err
-			}
-
 		}
+
+		// Create the file only if it doesn't exist
+		file, err := os.Create(fullPath)
+		if err != nil {
+			fmt.Printf("Failed to create file: %v\n", err)
+			return err
+		}
+		defer file.Close()
+
+		// Write the response body to the file
+		_, err = file.Write(bodyBytes)
+		if err != nil {
+			fmt.Printf("Failed to write to file: %v\n", err)
+			return err
+		}
+
 	}
 
 	// Write the body back to the response

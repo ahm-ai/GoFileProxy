@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -151,7 +151,7 @@ func enableCORS(handler http.HandlerFunc) http.HandlerFunc {
 
 func modifyResponse(r *http.Response, env string, _type string, uuid string) error {
 	// Read the response body
-	bodyBytes, err := ioutil.ReadAll(r.Body)
+	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		return err
 	}
@@ -258,7 +258,7 @@ func modifyResponse(r *http.Response, env string, _type string, uuid string) err
 	}
 
 	// Write the body back to the response
-	r.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 	return nil
 }
 

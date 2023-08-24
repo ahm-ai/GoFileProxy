@@ -86,46 +86,6 @@ func getEnvAndType() (string, string, bool, error) {
 	return env, _type, cacheEnabled, nil
 }
 
-func min(a, b, c int) int {
-	if a < b && a < c {
-		return a
-	}
-	if b < c {
-		return b
-	}
-	return c
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func createFolder(folderPath string, fullPath string, requestBody []byte) {
-	// Create all necessary directories in the path
-	if err := os.MkdirAll(folderPath, 0755); err != nil {
-		fmt.Printf("Failed to create directories: %v\n", err)
-		return
-	}
-
-	// Create the file
-	file, err := os.Create(fullPath)
-	if err != nil {
-		fmt.Printf("Failed to create file: %v\n", err)
-		return
-	}
-	defer file.Close()
-
-	// Write the request body to the file
-	_, err = file.Write(requestBody)
-	if err != nil {
-		fmt.Printf("Failed to write to file: %v\n", err)
-		return
-	}
-}
-
 func enableCORS(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 

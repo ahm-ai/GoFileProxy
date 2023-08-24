@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -90,6 +89,11 @@ func getEnvAndType() (string, string, bool, error) {
 func enableCORS(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "*"
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, post-check=0, pre-check=0")
@@ -99,7 +103,7 @@ func enableCORS(handler http.HandlerFunc) http.HandlerFunc {
 		// If it's a preflight request, respond with OK
 		if r.Method == "OPTIONS" {
 			if w.Header().Get("Access-Control-Allow-Origin") == "" {
-				w.Header().Set("Access-Control-Allow-Origin", "*") // Allow any origin
+				w.Header().Set("Access-Control-Allow-Origin", origin) // Allow any origin
 			}
 			w.WriteHeader(http.StatusOK)
 			return
@@ -281,44 +285,6 @@ func main() {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
-
-	// Create a cookie jar
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		coloredLogf(errorColor, "Error creating cookie jar: %v", err)
-		return
-	}
-
-	// Configure transport with the cookie jar
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		DisableKeepAlives:     false,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-
-	// Create client with the transport and cookie jar
-	client := &http.Client{
-		Transport: transport,
-		Jar:       jar,
-	}
-
-	// Handle up to 10 redirects
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return fmt.Errorf("too many redirects")
-		}
-		return nil
-	}
-
-	// Set client as the transport for the proxy
-	proxy.Transport = transport // Corrected line
 
 	http.HandleFunc("/", enableCORS(func(w http.ResponseWriter, r *http.Request) {
 		// coloredLogf(grayColor, "Received request: %s", r.URL.Path)
